@@ -16,7 +16,7 @@ using namespace std;
 namespace fs = std::filesystem;
 
 int getoptions(int argc, char **argv, int &recursive, int &case_sensitive, string &searchpath, vector<string> &filenames);
-bool search_file(string &searchpath, string filename, int recursive, int case_sensitive);
+bool searchFileInFolder(string &searchpath, string filename, int recursive, int case_sensitive);
 
 char *program_name = NULL;
 
@@ -28,29 +28,28 @@ void print_usage()
 
 void toLower(std::string &str)
 {
-    std::transform(str.begin(), str.end(), str.begin(), [](unsigned char c)
-                   { return std::tolower(c); });
+    transform(str.begin(), str.end(), str.begin(), ::tolower);
 }
 
-void find(string &searchpath, vector<string> &filenames, int recursive, int case_sensitive)
+void processSearch(string &searchpath, vector<string> &filenames, int recursive, int case_sensitive)
 {
     int fork_count = 0;
     pid_t wpid, child_pid;
 
-    for (string filename : filenames)
+    for (auto& filename : filenames)
     {
         if ((child_pid = fork()) == 0)
         {
             // Child process
             fork_count++;
-            bool found = false;
 
             if (!case_sensitive)
             {
                 toLower(filename);
+
             }
 
-            found = search_file(searchpath, filename, recursive, case_sensitive);
+            searchFileInFolder(searchpath, filename, recursive, case_sensitive);
 
             _exit(0); // Ensure the child process exits
         }
@@ -60,37 +59,35 @@ void find(string &searchpath, vector<string> &filenames, int recursive, int case
     while ((wpid = waitpid(-1, NULL, 0)) > 0);
 }
 
-bool search_file(string &searchpath, string filename, int recursive, int case_sensitive)
+bool searchFileInFolder(string &searchpath, string filename, int recursive, int case_sensitive)
 {
     vector<string> folders = {};
     bool found = false;
     try {
-        
-    
-    for (const auto &entry : fs::directory_iterator(searchpath))
-    {
-        string found_filename = entry.path().filename();
-
-        if (entry.is_directory() && recursive)
+        for (const auto &entry : fs::directory_iterator(searchpath))
         {
-            folders.push_back(entry.path());
-        }
+            string found_filename = entry.path().filename();
 
-        if (!case_sensitive)
-        {
-            toLower(found_filename);
-        }
+            if (entry.is_directory() && recursive)
+            {
+                folders.push_back(entry.path());
+                continue;
+            }
 
-        if (found_filename == filename)
-        {
-            //cout << getpid() << ": " << filename << ": " << fs::absolute(entry.path()) << endl;
-            string write_path = to_string(getpid()) + ": " + filename + ": " + fs::absolute(entry.path()).string() + "\n";
-           // cout << write_path;
-            close(pip[0]);
-            write(pip[1], write_path.c_str(), write_path.size());
-            found = true;
+            if (!case_sensitive)
+            {
+                toLower(found_filename);
+            }
+
+            if (found_filename == filename)
+            {
+                string write_path = to_string(getpid()) + ": " + filename + ": " + fs::absolute(entry.path()).string() + "\n";
+                close(pip[0]);
+                write(pip[1], write_path.c_str(), write_path.size());
+                found = true;
+                break;
+            }
         }
-    }
     } catch (const std::filesystem::filesystem_error& e) {
         cerr << "Filesystem error: " << e.what() << endl;
         return false;
@@ -107,7 +104,7 @@ bool search_file(string &searchpath, string filename, int recursive, int case_se
 
     for (string folder : folders)
     {
-        found = found ? true : search_file(folder, filename, recursive, case_sensitive);
+        found = found ? true : searchFileInFolder(folder, filename, recursive, case_sensitive);
     }
 
     return found;
@@ -126,26 +123,10 @@ int getoptions(int argc, char **argv, int &recursive, int &case_sensitive, strin
         switch (c)
         {
         case 'R':
-            if (recursive)
-            {
-                error = 1;
-            }
-            else
-            {
-                recursive = 1;
-                //printf("%s: parsing option R\n", program_name);
-            }
+            recursive ? error = 1 : recursive = 1;
             break;
         case 'i':
-            if (case_sensitive)
-            {
-                error = 1;
-            }
-            else
-            {
-                case_sensitive = 1;
-                //printf("%s: parsing option i\n", program_name);
-            }
+            case_sensitive ? case_sensitive = 0 : error = 1;
             break;
         case '?':
             error = 1;
@@ -167,22 +148,29 @@ int getoptions(int argc, char **argv, int &recursive, int &case_sensitive, strin
         return 1;
     }
 
+    // Parsing folder
     if (optind < argc)
     {
-        //printf("%s: parsing argument %s\n", program_name, argv[optind]);
         searchpath = argv[optind];
         optind++;
     }
 
-    // Second while loop: Parsing remaining arguments
+    // Parsing filenames
     while (optind < argc)
     {
-        //printf("%s: parsing argument %s\n", program_name, argv[optind]);
         filenames.push_back(argv[optind]);
         optind++;
     }
 
     return error;
+}
+
+void printPipe(char* readBuffer, int nbytes) {
+    close(pip[1]);
+    while ((nbytes = read(pip[0], readBuffer, sizeof(readBuffer) - 1)) > 0) {
+        readBuffer[nbytes] = '\0'; // Null-terminate the buffer
+        printf("%s", readBuffer);
+    }
 }
 
 /**
@@ -194,7 +182,7 @@ int main(int argc, char **argv)
     char readBuffer[1000];
     int nbytes;
     int recursive = 0;
-    int case_sensitive = 0;
+    int case_sensitive = 1;
     int c;
     int error = 0;
 
@@ -203,25 +191,13 @@ int main(int argc, char **argv)
     string searchpath = "";
     vector<string> filenames = {};
 
-    program_name = argv[0];
-
-    error = getoptions(argc, argv, recursive, case_sensitive, searchpath, filenames);
-
-    if (error)
-    {
-        return 1; // handle error appropriately
+    if (error = getoptions(argc, argv, recursive, case_sensitive, searchpath, filenames)) {
+        return 1;
     }
 
-    find(searchpath, filenames, recursive, case_sensitive);
+    processSearch(searchpath, filenames, recursive, case_sensitive);
 
-    //cout << "Ausgabe erfolgt nun von der pipe:" << endl;
-
-    close(pip[1]);
-    while ((nbytes = read(pip[0], readBuffer, sizeof(readBuffer) - 1)) > 0) {
-        readBuffer[nbytes] = '\0'; // Null-terminate the buffer
-        printf("%s", readBuffer);
-    }
+    printPipe(readBuffer, nbytes);
     
-
     return 0;
 }
