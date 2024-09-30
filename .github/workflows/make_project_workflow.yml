@@ -17,11 +17,12 @@ jobs:
     - name: Install build-essential
       run: sudo apt-get install build-essential
 
+    - name: Cache build output
+      uses: actions/cache@v3
+      with:
+        path: ./myfind
+        key: ${{ runner.os }}-myfind-${{ github.sha }}
+  
     - name: Build with Makefile
       run: make all
 
-    - name: Upload myfind executable as artifact
-      uses: actions/upload-artifact@v3
-      with:
-        name: myfind-executable
-        path: ./myfind
